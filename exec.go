@@ -34,6 +34,8 @@ type (
 		bufSize         int
 		name            string
 		closeWait       *time.Duration
+
+		bufferedWritesCount *int
 	}
 
 	RunCmdOpt func(*RunCmdOpts)
@@ -63,6 +65,14 @@ func RunCmdWithBufSize(size int) RunCmdOpt {
 	return func(o *RunCmdOpts) {
 		if size > 0 {
 			o.bufSize = size
+		}
+	}
+}
+
+func RunCmdWithBufferedWritesCount(n int) RunCmdOpt {
+	return func(o *RunCmdOpts) {
+		if n >= 0 {
+			o.bufferedWritesCount = &n
 		}
 	}
 }
@@ -187,6 +197,10 @@ func NewStreamForCmd(cmd *exec.Cmd, opts ...RunCmdOpt) (*CombineStream, CmdClean
 
 		if optsToSet.bufSize > 0 {
 			st.WithBufSize(optsToSet.bufSize)
+		}
+
+		if optsToSet.bufferedWritesCount != nil {
+			st.WithWritesBufferedCount(*optsToSet.bufferedWritesCount)
 		}
 
 		streamName := fmt.Sprintf("%s:%s", optsToSet.name, name)

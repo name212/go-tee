@@ -22,11 +22,13 @@ type baseStream struct {
 	stopped    *ClosedFlag
 	name       string
 	beforeStop []BeforeStop
+	writesCount int
 }
 
 func newBaseStream() *baseStream {
 	return &baseStream{
 		stopped: NewClosedFlag(),
+		writesCount: DefaultConsumerBufferedWrites,
 	}
 }
 
@@ -44,6 +46,14 @@ func (s *baseStream) GetName() string {
 
 func (s *baseStream) WithBeforeStop(bs ...BeforeStop) {
 	s.beforeStop = bs
+}
+
+func (c *baseStream) WithWritesBufferedCount(n int) {
+	c.writesCount = n
+}
+
+func (c *baseStream) WritesBufferedCount() int {
+	return c.writesCount
 }
 
 func (s *baseStream) setStopped() bool {

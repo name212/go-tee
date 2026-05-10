@@ -11,18 +11,13 @@ import (
 	"github.com/name212/gotee/internal"
 )
 
+const (
+	DefaultConsumerBufferedWrites = 100
+)
+
 type (
 	ConsumersErrors = map[string]error
 	BeforeStop      func()
-
-	noValT   = struct{}
-	stopChan = chan noValT
-	outChan  = chan []byte
-	errChan  = chan error
-)
-
-var (
-	noVal = struct{}{}
 )
 
 type Consumer interface {
@@ -33,26 +28,13 @@ type Consumer interface {
 type Stream interface {
 	Run(ctx context.Context) *Results
 	WithBeforeStop(...BeforeStop)
+	WritesBufferedCount() int
 	Stop()
 }
 
 type Results struct {
 	ReadErr       error
 	ConsumersErrs ConsumersErrors
-}
-
-func newStoppedResults() *Results {
-	return &Results{
-		ReadErr:       ErrStopped,
-		ConsumersErrs: make(ConsumersErrors),
-	}
-}
-
-func newEmptyResults() *Results {
-	return &Results{
-		ReadErr:       nil,
-		ConsumersErrs: make(ConsumersErrors),
-	}
 }
 
 func (r *Results) HasReadError() bool {
@@ -105,3 +87,28 @@ func (r *Results) Error() string {
 
 	return ""
 }
+
+func newStoppedResults() *Results {
+	return &Results{
+		ReadErr:       ErrStopped,
+		ConsumersErrs: make(ConsumersErrors),
+	}
+}
+
+func newEmptyResults() *Results {
+	return &Results{
+		ReadErr:       nil,
+		ConsumersErrs: make(ConsumersErrors),
+	}
+}
+
+type (
+	noValT   = struct{}
+	stopChan = chan noValT
+	outChan  = chan []byte
+	errChan  = chan error
+)
+
+var (
+	noVal = struct{}{}
+)

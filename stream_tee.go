@@ -62,8 +62,10 @@ func (s *TeeStream) Run(ctx context.Context) *Results {
 	// only in sendToAll that called from select
 	currentPipesForSend := make([]*pipe, 0, allPipesLen)
 
+	pipeWritesBufferedCount := s.WritesBufferedCount()
+
 	for _, c := range s.consumers {
-		p := newPipe(c)
+		p := newPipe(c, pipeWritesBufferedCount)
 		allPipes = append(allPipes, p)
 		currentPipesForSend = append(currentPipesForSend, p)
 		go p.Start()

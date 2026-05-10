@@ -30,10 +30,17 @@ type pipe struct {
 	resultErr error
 }
 
-func newPipe(consumer Consumer) *pipe {
+func newPipe(consumer Consumer, writesCount int) *pipe {
+	var writeCh outChan
+	if writesCount > 0 {
+		writeCh = make(outChan, writesCount)
+	} else {
+		writeCh = make(outChan)
+	}
+
 	return &pipe{
 		endCh:    make(stopChan, 2),
-		writeCh:  make(outChan, 100),
+		writeCh:  writeCh,
 		consumer: consumer,
 		stopped:  NewClosedFlag(),
 	}
