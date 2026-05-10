@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func CalculateStreamName(deep int, name ...string) string {
+func ConsumerName(deep int, name ...string) string {
 	if len(name) > 0 {
 		return strings.Join(name, " ")
 	}
@@ -36,20 +36,4 @@ func CopyBytes(input []byte) []byte {
 	res := make([]byte, len(input))
 	copy(res, input)
 	return res
-}
-
-func appendErr(resErr error, toAppend error) error {
-	if toAppend == nil {
-		return resErr
-	}
-
-	if resErr != nil {
-		return fmt.Errorf("%w\n%w", resErr, toAppend)
-	}
-
-	return toAppend
-}
-
-func concatErrs(first, second error) error {
-	return fmt.Errorf("%w: %w", first, second)
 }

@@ -11,7 +11,7 @@ type BaseConsumer struct {
 func NewBaseConsumer(n string) *BaseConsumer {
 	return &BaseConsumer{
 		closed: NewClosedFlag(),
-		name: n,
+		name:   n,
 	}
 }
 
@@ -32,7 +32,7 @@ type privateBaseConsumer struct {
 }
 
 func newPrivateBaseConsumer(name ...string) *privateBaseConsumer {
-	nameForSet := CalculateStreamName(2, name...)
+	nameForSet := ConsumerName(2, name...)
 	return &privateBaseConsumer{
 		base: NewBaseConsumer(nameForSet),
 	}

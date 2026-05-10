@@ -15,14 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/name212/gotee"
 	tee "github.com/name212/gotee"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	_ tee.Consumer    = &testWriteCloserConsumer{}
-	_ io.WriteCloser  = &testWriteCloser{}
-	_ io.Writer       = &testWriteCloser{}
+	_ tee.Consumer   = &testWriteCloserConsumer{}
+	_ io.WriteCloser = &testWriteCloser{}
+	_ io.Writer      = &testWriteCloser{}
 )
 
 var (
@@ -32,10 +33,11 @@ var (
 type testWriteCloserConsumer struct {
 	*tee.BaseConsumer
 
-	mu       sync.Mutex
-	buf      *bytes.Buffer
-	writeErr error
-	closeErr error
+	mu                sync.Mutex
+	buf               *bytes.Buffer
+	writeErrorChecker func([]byte) ([]byte, error)
+	writeErr          error
+	closeErr          error
 }
 
 func newTestWriteCloserConsumer(name string) *testWriteCloserConsumer {
@@ -49,6 +51,8 @@ func (c *testWriteCloserConsumer) Write(p []byte) (int, error) {
 	if c.IsClosed() {
 		return 0, tee.ErrClosed
 	}
+
+	c.checkErr(p)
 
 	if err := c.getWriteErr(); err != nil {
 		return 0, err
@@ -87,6 +91,33 @@ func (c *testWriteCloserConsumer) setWriteErr(err error) {
 	defer c.mu.Unlock()
 
 	c.writeErr = err
+}
+
+func (c *testWriteCloserConsumer) checkErr(input []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.writeErrorChecker != nil {
+		bt := c.buf.Bytes()
+		bt = gotee.CopyBytes(bt)
+		bt = append(bt, input...)
+		if cut, err := c.writeErrorChecker(bt); err != nil {
+			c.buf.Write(input)
+			all := c.buf.Bytes()
+			indx := bytes.Index(all, cut)
+			all = all[0:indx]
+			c.buf.Reset()
+			c.buf.Write(all)
+			c.writeErr = err
+		}
+	}
+}
+
+func (c *testWriteCloserConsumer) setWriteErrChecker(ch func([]byte) ([]byte, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.writeErrorChecker = ch
 }
 
 func (c *testWriteCloserConsumer) getCloseErr() error {

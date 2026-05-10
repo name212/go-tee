@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/name212/gotee/internal"
 )
 
 var _ Stream = &CombineStream{}
@@ -29,7 +31,7 @@ func NewCombineStream(streams ...Stream) (*CombineStream, error) {
 
 func (s *CombineStream) Run(ctx context.Context) *Results {
 	if s.isStopped() {
-		return NewStoppedResults()
+		return newStoppedResults()
 	}
 
 	streamsCount := len(s.streams)
@@ -62,7 +64,7 @@ func (s *CombineStream) Run(ctx context.Context) *Results {
 
 	for i, res := range results {
 		if res.ReadErr != nil {
-			resReadErr = appendErr(resReadErr, fmt.Errorf("stream %d read err: %w", i, res.ReadErr))
+			resReadErr = internal.AppendErr(resReadErr, fmt.Errorf("stream %d read err: %w", i, res.ReadErr))
 		}
 
 		for c, cErr := range res.ConsumersErrs {
@@ -81,7 +83,7 @@ func (s *CombineStream) Run(ctx context.Context) *Results {
 		ConsumersErrs: resConsumersErrors,
 	}
 
-	if r.HasAnyError() {
+	if r.HasLeastOneError() {
 		return r
 	}
 
@@ -93,9 +95,16 @@ func (s *CombineStream) Stop() {
 		return
 	}
 
-	for _, s := range s.streams {
-		go func() {
-			s.Stop()
-		}()
+	logger := s.createLogger("STOP")
+
+	s.runBeforeStop(logger)
+
+	for indx, st := range s.streams {
+		logger.Log("Stopping stream %d", indx)
+		st.Stop()
 	}
+}
+
+func (s *CombineStream) createLogger(target string) internal.Logger {
+	return internal.GetDebugLogger("COMBINE_STREAM", s.GetName(), target)
 }

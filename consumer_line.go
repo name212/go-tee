@@ -24,22 +24,22 @@ type LineHandler interface {
 }
 
 func NewLineConsumer(handler LineHandler, name ...string) *SplitConsumer {
-	nameForSet := []string{CalculateStreamName(1, name...)}
+	nameForSet := []string{ConsumerName(1, name...)}
 	return newLineConsumer(handler, nameForSet...)
 }
 
 func NewCustomLineConsumer(partsHandler PartsHandler, name ...string) *SplitConsumer {
-	nameForSet := []string{CalculateStreamName(1, name...)}
+	nameForSet := []string{ConsumerName(1, name...)}
 	return NewSplitConsumer(bufio.ScanLines, partsHandler, nameForSet...)
 }
 
 func NewFuncLineConsumer(handler FuncStr, name ...string) *SplitConsumer {
-	nameForSet := []string{CalculateStreamName(1, name...)}
+	nameForSet := []string{ConsumerName(1, name...)}
 	return newLineConsumer(NewFuncLineHandler(handler), nameForSet...)
 }
 
 func NewFuncNoErrLineConsumer(handler FuncStrNoErr, name ...string) *SplitConsumer {
-	nameForSet := []string{CalculateStreamName(1, name...)}
+	nameForSet := []string{ConsumerName(1, name...)}
 	return newLineConsumer(NewFuncNoErrLineHandler(handler), nameForSet...)
 }
 

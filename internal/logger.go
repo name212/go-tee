@@ -1,7 +1,7 @@
 // Copyright 2026
 // license that can be found in the LICENSE file.
 
-package gotee
+package internal
 
 import (
 	"fmt"
@@ -9,12 +9,12 @@ import (
 	"strings"
 )
 
-type debugLogger interface {
+type Logger interface {
 	Log(string, ...any)
 	LogBuf([]byte, int, string, ...any)
 }
 
-func getDebugLogger(targets ...string) debugLogger {
+func GetDebugLogger(targets ...string) Logger {
 	if e := os.Getenv("GO_TEE_ENABLE_DEBUG_LOG"); e == "" {
 		return &emptyLogger{}
 	}
@@ -67,7 +67,7 @@ func (l *fmtLogger) LogBuf(buf []byte, consume int, f string, args ...any) {
 
 func (l *fmtLogger) printF(f string, args ...any) {
 	f = l.pref + f + "\n"
-	fmt.Printf(f, args...)
+	_, _ = fmt.Fprintf(os.Stderr, f, args...)
 }
 
 func newFmtLogger(fullBuf bool, targets ...string) *fmtLogger {
@@ -78,7 +78,7 @@ func newFmtLogger(fullBuf bool, targets ...string) *fmtLogger {
 }
 
 func createPrefixForLogger(targets ...string) string {
-	pref := "[github.com/name212/go-tee][DEBUG]"
+	pref := "[github.com/name212/gotee][DEBUG]"
 
 	if len(targets) > 0 {
 		resTargets := make([]string, 0, len(targets))

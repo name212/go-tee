@@ -57,14 +57,14 @@ func (c *SplitConsumer) Write(p []byte) (int, error) {
 
 	hasScanErr := !internal.IsNil(scanErr)
 	if receiveLastToken || hasScanErr {
-		flushErr := appendErr(scanErr, c.flush(true, internal.IsNil(scanErr)))
+		flushErr := internal.AppendErr(scanErr, c.flush(true, internal.IsNil(scanErr)))
 		// not handle error because already flush
 		_ = c.Close()
 		l := 0
 		if !hasScanErr {
 			l = len(p)
 		}
-		return l, appendErr(flushErr, ErrClosed)
+		return l, internal.AppendErr(flushErr, ErrClosed)
 	}
 
 	return len(p), nil

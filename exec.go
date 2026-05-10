@@ -8,24 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"os/exec"
+	"time"
+
+	"github.com/name212/gotee/internal"
 )
 
-type Cleaner func() error
-
-type Piper interface {
-	StdoutPipe() (io.ReadCloser, error)
-	StderrPipe() (io.ReadCloser, error)
-}
-
-type Command interface {
-	Piper
-	fmt.Stringer
-	Start() error
-	Wait() error
+type CmdCleaner interface {
+	GetError(noWait ...bool) error
 }
 
 var (
+	ErrCmdCleanerNotFinished = fmt.Errorf("CmdCleaner not finished")
 	ErrCleanAfterRun         = fmt.Errorf("cannot clean after run cmd")
 	ErrRunCmd                = fmt.Errorf("cannot run cmd")
 	ErrCreateStreamBeforeRun = fmt.Errorf("cannot create stream before run cmd")
@@ -37,6 +33,7 @@ type (
 		stderrConsumers []Consumer
 		bufSize         int
 		name            string
+		closeWait       *time.Duration
 	}
 
 	RunCmdOpt func(*RunCmdOpts)
@@ -72,23 +69,42 @@ func RunCmdWithBufSize(size int) RunCmdOpt {
 
 func RunCmdWithName(name string) RunCmdOpt {
 	return func(o *RunCmdOpts) {
+		if o.name != "" {
+			return
+		}
+
 		o.name = name
 	}
 }
 
-func RunCmd(ctx context.Context, cmd Command, opts ...RunCmdOpt) (*Results, error) {
+func RunCmdWithCloseWait(w time.Duration) RunCmdOpt {
+	return func(o *RunCmdOpts) {
+		if o.closeWait != nil {
+			return
+		}
+
+		o.closeWait = &w
+	}
+}
+
+func RunCmd(ctx context.Context, cmd *exec.Cmd, opts ...RunCmdOpt) (*Results, error) {
 	returnErr := func(err error) (*Results, error) {
-		return NewEmptyResults(), err
+		return newEmptyResults(), err
 	}
 
 	cloneOpts := make([]RunCmdOpt, len(opts))
 	copy(cloneOpts, opts)
 
-	cloneOpts = append(cloneOpts, RunCmdWithName(cmd.String()))
+	runCmdAdditionalOptions := []RunCmdOpt{
+		RunCmdWithName(cmd.String()),
+		RunCmdWithCloseWait(200 * time.Millisecond),
+	}
+
+	cloneOpts = append(cloneOpts, runCmdAdditionalOptions...)
 
 	stream, cleaner, err := NewStreamForCmd(cmd, cloneOpts...)
 	if err != nil {
-		return returnErr(concatErrs(ErrCreateStreamBeforeRun, err))
+		return returnErr(internal.ConcatErrs(ErrCreateStreamBeforeRun, err))
 	}
 
 	resCh := make(chan *Results, 1)
@@ -96,17 +112,17 @@ func RunCmd(ctx context.Context, cmd Command, opts ...RunCmdOpt) (*Results, erro
 	go func() {
 		res := stream.Run(ctx)
 		resCh <- res
+		close(resCh)
 	}()
 
 	cleanupAndReturnErr := func(err error) (*Results, error) {
 		stream.Stop()
 
-		cleanErr := cleaner()
-		if cleanErr != nil {
-			err = appendErr(err, concatErrs(ErrCleanAfterRun, cleanErr))
+		if cleanerErr := cleaner.GetError(); cleanerErr != nil {
+			err = internal.AppendErr(err, cleanerErr)
 		}
 
-		return NewEmptyResults(), err
+		return newEmptyResults(), err
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -120,20 +136,14 @@ func RunCmd(ctx context.Context, cmd Command, opts ...RunCmdOpt) (*Results, erro
 	stream.Stop()
 	results := <-resCh
 
-	close(resCh)
-
-	if err := cleaner(); err != nil {
-		return results, concatErrs(ErrCleanAfterRun, err)
+	if err := cleaner.GetError(); err != nil {
+		return results, internal.ConcatErrs(ErrCleanAfterRun, err)
 	}
 
 	return results, nil
 }
 
-func NewStreamForCmd(cmd Piper, opts ...RunCmdOpt) (*CombineStream, Cleaner, error) {
-	createErr := func(f string, args ...any) (*CombineStream, Cleaner, error) {
-		return nil, noCleaner, fmt.Errorf(f, args...)
-	}
-
+func NewStreamForCmd(cmd *exec.Cmd, opts ...RunCmdOpt) (*CombineStream, CmdCleaner, error) {
 	optsToSet := &RunCmdOpts{
 		bufSize: DefaultBufSize,
 	}
@@ -146,11 +156,28 @@ func NewStreamForCmd(cmd Piper, opts ...RunCmdOpt) (*CombineStream, Cleaner, err
 	stderrConsumers := optsToSet.stderrConsumers
 
 	if len(stdoutConsumers) == 0 && len(stderrConsumers) == 0 {
-		return createErr("stdout and/or sterr consumers not passed")
+		return nil, &noCleaner{}, fmt.Errorf("stdout and/or sterr consumers not passed")
+	}
+
+	closeWaitTime := time.Duration(0)
+	if optsToSet.closeWait != nil {
+		closeWaitTime = *optsToSet.closeWait
+	}
+
+	cleaner := newReaderWriterCleaner(closeWaitTime)
+
+	createErr := func(f string, args ...any) (*CombineStream, CmdCleaner, error) {
+		cleaner.close()
+		return nil, cleaner, fmt.Errorf(f, args...)
 	}
 
 	streams := make([]Stream, 0, 2)
-	closers := make(map[string]io.Closer)
+
+	createPipe := func(name string) (io.ReadCloser, io.WriteCloser) {
+		reader, writer := io.Pipe()
+		cleaner.append(name, reader, writer)
+		return reader, writer
+	}
 
 	createTeeStream := func(r io.Reader, consumers []Consumer, name string) (*TeeStream, error) {
 		st, err := NewTeeStream(r, consumers...)
@@ -163,41 +190,37 @@ func NewStreamForCmd(cmd Piper, opts ...RunCmdOpt) (*CombineStream, Cleaner, err
 		}
 
 		streamName := fmt.Sprintf("%s:%s", optsToSet.name, name)
-		return st.WithName(streamName), nil
+		st.WithName(streamName)
+
+		return st, nil
 	}
 
 	if len(stdoutConsumers) > 0 {
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return createErr("create stdout pipe failed: %w", err)
-		}
-
 		const stdoutName = "stdout"
 
-		st, err := createTeeStream(stdout, stdoutConsumers, stdoutName)
+		reader, writer := createPipe(stdoutName)
+		cmd.Stdout = writer
+
+		st, err := createTeeStream(reader, stdoutConsumers, stdoutName)
 		if err != nil {
 			return createErr("cannot create TeeStream for stdout: %w", err)
 		}
 
 		streams = append(streams, st)
-		closers[stdoutName] = stdout
 	}
 
 	if len(stderrConsumers) > 0 {
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			return createErr("stderr pipe failed: %w", err)
-		}
-
 		const stderrName = "stderr"
 
-		st, err := createTeeStream(stderr, stderrConsumers, stderrName)
+		reader, writer := createPipe(stderrName)
+		cmd.Stderr = writer
+
+		st, err := createTeeStream(reader, stderrConsumers, stderrName)
 		if err != nil {
 			return createErr("cannot create TeeStream for stderr: %w", err)
 		}
 
 		streams = append(streams, st)
-		closers[stderrName] = stderr
 	}
 
 	combine, err := NewCombineStream(streams...)
@@ -205,31 +228,121 @@ func NewStreamForCmd(cmd Piper, opts ...RunCmdOpt) (*CombineStream, Cleaner, err
 		return createErr("cannot create combine stream: %w", err)
 	}
 
-	cleaner := func() error {
-		var resErr error
-
-		for name, cl := range closers {
-			if err := cl.Close(); err != nil {
-				if !cmdPipeClosed(err) {
-					resErr = appendErr(resErr, fmt.Errorf("cannot close pipe for %s: %w", name, err))
-				}
-			}
-		}
-
-		return resErr
-	}
+	combine.WithBeforeStop(func() {
+		cleaner.close()
+	})
 
 	return combine, cleaner, nil
 }
 
 func cmdPipeClosed(err error) bool {
+	if errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+
 	if errors.Is(err, os.ErrClosed) {
 		return true
+	}
+
+	if errors.Is(err, fs.ErrClosed) {
+		return true
+	}
+
+	if fsError, ok := err.(*fs.PathError); ok {
+		if errors.Is(fsError.Err, fs.ErrClosed) {
+			return true
+		}
+	}
+
+	if osError, ok := err.(*os.PathError); ok {
+		if errors.Is(osError.Err, os.ErrClosed) {
+			return true
+		}
 	}
 
 	return false
 }
 
-func noCleaner() error {
+type noCleaner struct{}
+
+func (c *noCleaner) GetError(noWait ...bool) error {
 	return nil
+}
+
+type readerWriterCleaner struct {
+	errCh errChan
+
+	*ClosedFlag
+	err error
+
+	readers map[string]io.Closer
+	writers map[string]io.Closer
+
+	closeReadersWait time.Duration
+}
+
+func newReaderWriterCleaner(closeReadersWait time.Duration) *readerWriterCleaner {
+	return &readerWriterCleaner{
+		closeReadersWait: closeReadersWait,
+		ClosedFlag:       NewClosedFlag(),
+		errCh:            make(errChan, 1),
+		readers:          make(map[string]io.Closer),
+		writers:          make(map[string]io.Closer),
+	}
+}
+
+func (c *readerWriterCleaner) append(name string, reader, writer io.Closer) {
+	c.readers[name] = reader
+	c.writers[name] = writer
+}
+
+func (c *readerWriterCleaner) close() {
+	if c.IsClosed() {
+		return
+	}
+
+	// first close writers
+	err := c.closeOnly("writer", c.writers)
+
+	// wait some time for reads
+	if c.closeReadersWait > 0 {
+		time.Sleep(c.closeReadersWait)
+	}
+
+	err = internal.AppendErr(err, c.closeOnly("reader", c.readers))
+
+	c.errCh <- err
+	close(c.errCh)
+}
+
+func (c *readerWriterCleaner) closeOnly(tp string, closers map[string]io.Closer) error {
+	var resErr error
+	for name, closer := range closers {
+		if err := closer.Close(); err != nil {
+			if !cmdPipeClosed(err) {
+				resErr = internal.AppendErr(resErr, fmt.Errorf("cannot close %s for %s: %w", tp, name, err))
+			}
+		}
+	}
+
+	return resErr
+}
+
+func (c *readerWriterCleaner) GetError(noWait ...bool) error {
+	if c.IsClosed() {
+		return c.err
+	}
+
+	if len(noWait) > 0 && noWait[0] {
+		select {
+		case c.err = <-c.errCh:
+		default:
+		}
+	} else {
+		c.err = <-c.errCh
+	}
+
+	c.SetClosed()
+
+	return c.err
 }

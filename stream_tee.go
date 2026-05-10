@@ -22,8 +22,6 @@ type TeeStream struct {
 	consumers []Consumer
 
 	innerStopCh stopChan
-
-	name string
 }
 
 func NewTeeStream(input io.Reader, consumers ...Consumer) (*TeeStream, error) {
@@ -48,67 +46,95 @@ func (s *TeeStream) WithBufSize(size int) *TeeStream {
 	return s
 }
 
-func (s *TeeStream) WithName(n string) *TeeStream {
-	s.name = n
-
-	return s
-}
-
 func (s *TeeStream) Run(ctx context.Context) *Results {
 	if s.isStopped() {
-		return NewStoppedResults()
+		return newStoppedResults()
 	}
 
 	stopCh := make(stopChan, 2)
 	errCh := make(errChan)
 	outCh := make(outChan)
 
-	pipes := make([]*pipe, 0, len(s.consumers))
+	allPipesLen := len(s.consumers)
+
+	allPipes := make([]*pipe, 0, allPipesLen)
+	// no need mutex because we use currentPipesForSend
+	// only in sendToAll that called from select
+	currentPipesForSend := make([]*pipe, 0, allPipesLen)
+
 	for _, c := range s.consumers {
 		p := newPipe(c)
-		pipes = append(pipes, p)
-		go p.start()
+		allPipes = append(allPipes, p)
+		currentPipesForSend = append(currentPipesForSend, p)
+		go p.Start()
 	}
 
 	logger := s.createLogger("RUN")
 	loggerSendAll := s.createLogger("SEND_ALL")
 
-	sendToAll := func(b []byte) error {
-		pipesCount := len(pipes)
-		loggerSendAll.LogBuf(b, -1, "Send buf to %d", pipesCount)
+	// to avoid allocation
+	// no need mutex because we use pipesForRemove
+	// only in sendToAll that called from select
+	pipesForRemove := make(map[int]struct{}, allPipesLen)
 
-		errConsumers := 0
-		closedConsumers := 0
+	sendToAll := func(b []byte) error {
+		pipesCount := len(currentPipesForSend)
+
+		loggerSendAll.LogBuf(b, -1, "Send buf to current pipes %d", pipesCount)
+
+		errPipes := 0
+		stoppedPipes := 0
 		sended := 0
 
-		for _, p := range pipes {
-			closed, err := p.isClosed()
-			if closed {
-				closedConsumers++
-				if err != nil {
-					errConsumers++
-				}
+		clear(pipesForRemove)
+
+		for indx, p := range currentPipesForSend {
+			stoppedOrErr := false
+			stopped, writeErr := p.WriteToPipe(b)
+
+			if stopped {
+				stoppedPipes++
+				stoppedOrErr = true
+			}
+
+			if !internal.IsNil(writeErr) {
+				errPipes++
+				stoppedOrErr = true
+			}
+
+			if stoppedOrErr {
+				loggerSendAll.Log("detect stopped or write error pipe for consumer '%s'", p.consumer.Name())
+				pipesForRemove[indx] = struct{}{}
 				continue
 			}
 
 			sended++
-			p.writeToPipe(b)
 		}
 
 		loggerSendAll.Log(
 			"sends %d: done %d; closed %d, errors: %d",
 			pipesCount,
 			sended,
-			closedConsumers,
-			errConsumers,
+			stoppedPipes,
+			errPipes,
 		)
 
-		if errConsumers == pipesCount {
-			return fmt.Errorf("all consumers have errors")
+		if len(pipesForRemove) > 0 {
+			toReplacePipes := make([]*pipe, 0)
+			loggerSendAll.Log("Got pipes for remove %d", len(pipesForRemove))
+			for indx, pipeToSave := range currentPipesForSend {
+				if _, ok := pipesForRemove[indx]; ok {
+					loggerSendAll.Log("remove pipe for consumer '%s' from pipes to send", pipeToSave.consumer.Name())
+					continue
+				}
+				toReplacePipes = append(toReplacePipes, pipeToSave)
+			}
+
+			currentPipesForSend = toReplacePipes
 		}
 
-		if closedConsumers == pipesCount {
-			return fmt.Errorf("all consumers closed")
+		if len(currentPipesForSend) == 0 {
+			return fmt.Errorf("all consumers have errors or stopped")
 		}
 
 		return nil
@@ -145,21 +171,21 @@ OuterLoop:
 		}
 	}
 
+	logger.Log("End read. Stop pipes")
+
 	consumersErrs := make(ConsumersErrors)
 
-	for _, p := range pipes {
-		closed, err := p.isClosed()
-		if !closed {
-			logger.Log("Inner pipe for not closed. Close...", p.consumer.Name())
-			p.close()
-		}
+	for _, p := range allPipes {
+		consumerName := p.consumer.Name()
+		logger.Log("Close pipe pipe for '%s'...", consumerName)
 
-		if err != nil {
-			consumersErrs[p.consumer.Name()] = err
+		if err := p.Stop(); err != nil {
+			consumersErrs[consumerName] = err
+			logger.Log("Consumer '%s' has error: '%v'. Save to results", consumerName, err)
 		}
 	}
 
-	logger.Log("Send stop to read cycle")
+	logger.Log("All pipes were closed. Send stop to reader cycle...")
 
 	s.Stop()
 
@@ -168,22 +194,27 @@ OuterLoop:
 		ConsumersErrs: consumersErrs,
 	}
 
-	if r.HasAnyError() {
-		logger.Log("Has any errors")
+	if r.HasLeastOneError() {
+		logger.Log("Has least one errors. Returns not nil results")
 		return r
 	}
 
-	logger.Log("Done!")
+	logger.Log("Done without errors. Returns nil results")
 
 	return nil
 }
 
 func (s *TeeStream) Stop() {
+	logger := s.createLogger("STOP")
+
 	if s.setStopped() {
+		logger.Log("Already stopped")
 		return
 	}
 
-	s.createLogger("STOP").Log("Send stop signal to reader cycle")
+	s.runBeforeStop(logger)
+
+	logger.Log("Send stop signal to reader cycle")
 
 	s.innerStopCh <- noVal
 }
@@ -212,6 +243,8 @@ func (s *TeeStream) startRead(outCh outChan, stopCh stopChan, errCh errChan) {
 				sendStop()
 				return
 			}
+
+			logger.Log("Continue read...")
 
 			continue
 		}
@@ -249,6 +282,6 @@ func (s *TeeStream) isEndRead(err error) bool {
 	return false
 }
 
-func (p *TeeStream) createLogger(target string) debugLogger {
-	return getDebugLogger("TEE_STREAM", p.name, target)
+func (p *TeeStream) createLogger(target string) internal.Logger {
+	return internal.GetDebugLogger("TEE_STREAM", p.GetName(), target)
 }

@@ -23,7 +23,7 @@ func NewFuncConsumer(h Func, name ...string) *FuncConsumer {
 }
 
 func NewFuncNoErrConsumer(h FuncNoErr, name ...string) *FuncConsumer {
-	nameForSet := CalculateStreamName(1, name...)
+	nameForSet := ConsumerName(1, name...)
 	return NewFuncConsumer(
 		func(b []byte) error {
 			h(b)
