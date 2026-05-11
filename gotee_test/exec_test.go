@@ -30,7 +30,8 @@ func TestExec(t *testing.T) {
 	suit.runOnlyStdOnlyTest()
 
 	var (
-		errStdoutOnlyWriter = fmt.Errorf("errStdoutOnlyWriter")
+		errStdoutOnlyWriter       = fmt.Errorf("errStdoutOnlyWriter")
+		errStdoutOnlyWriterSecond = fmt.Errorf("secondErrStdoutOnlyWriter")
 	)
 
 	stdOutOnlyTest := []testExec{
@@ -145,6 +146,54 @@ Third string
 					"Second string",
 					"Third string",
 				}...)
+			},
+		},
+
+		{
+			name: "multiple consumers with error multiple error sleep",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				consumers := returnDefaultErrWriterConsumer(tst, "stdout_err_writer_first", func(b []byte) ([]byte, error) {
+					cut := []byte("Second")
+					if bytes.Contains(b, cut) {
+						t.Logf("Return error for first %v", errStdoutOnlyWriter)
+						return cut, errStdoutOnlyWriter
+					}
+					return cut, nil
+				})
+
+				second := newErrWriterConsumer(tst, "stdout_err_writer_second", "second", func(b []byte) ([]byte, error) {
+					cut := []byte("string")
+					if bytes.Contains(b, cut) {
+						t.Logf("Return error for second %v", errStdoutOnlyWriterSecond)
+						return cut, errStdoutOnlyWriterSecond
+					}
+					return cut, nil
+				})
+
+				consumers = append(consumers, second)
+
+				consumers = append(consumers, returnDefaultLineConsumer(tst, "stdout_err_writer_line_all_mul")...)
+
+				return consumers
+			},
+			script: scriptStdOutAndErrWithSleep(3),
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(
+					t,
+					results,
+					errStdoutOnlyWriter.Error(),
+					errStdoutOnlyWriterSecond.Error(),
+				)
+				assertExecError(t, err, false)
+
+				assertDefaultWriterConsumer(t, tst, "First string\n")
+				assertDefaultLinesHandler(t, tst, []string{
+					"First string",
+					"Second string",
+					"Third string",
+				}...)
+
+				assertWriterConsumer(t, tst.consumersData["second"], "First ")
 			},
 		},
 	}
@@ -337,12 +386,16 @@ func returnDefaultWriterConsumer(tst *testExec, name string) []tee.Consumer {
 	return []tee.Consumer{newWriterConsumer(tst, name, execTestDefaultWriterKey)}
 }
 
-func returnDefaultErrWriterConsumer(tst *testExec, name string, checker func([]byte) ([]byte, error)) []tee.Consumer {
+func newErrWriterConsumer(tst *testExec, name, key string, checker func([]byte) ([]byte, error)) tee.Consumer {
 	consumer := newTestWriteCloserConsumer(name)
 	consumer.setWriteErrChecker(checker)
-	tst.consumersData[execTestDefaultWriterKey] = consumer
+	tst.consumersData[key] = consumer
 
-	return []tee.Consumer{consumer}
+	return consumer
+}
+
+func returnDefaultErrWriterConsumer(tst *testExec, name string, checker func([]byte) ([]byte, error)) []tee.Consumer {
+	return []tee.Consumer{newErrWriterConsumer(tst, name, execTestDefaultWriterKey, checker)}
 }
 
 func assertDefaultBuffer(t *testing.T, tst *testExec, expected ...string) {
