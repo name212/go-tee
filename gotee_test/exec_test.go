@@ -27,14 +27,15 @@ func TestExec(t *testing.T) {
 	suit := newTestExecSuit(t)
 
 	suit.enableDebug(true)
-	suit.runOnlyStdOnlyTest()
+	suit.runStdoutOnlyTest()
+	suit.runStdoutAndErrTest()
 
 	var (
 		errStdoutOnlyWriter       = fmt.Errorf("errStdoutOnlyWriter")
 		errStdoutOnlyWriterSecond = fmt.Errorf("secondErrStdoutOnlyWriter")
 	)
 
-	stdOutOnlyTest := []testExec{
+	stdOutOnlyTests := []testExec{
 		{
 			name: "one buffer consumer",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
@@ -198,9 +199,45 @@ Third string
 		},
 	}
 
-	t.Run("stout only", func(t *testing.T) {
-		for indx, tt := range stdOutOnlyTest {
+	stdoutAndStdErrTests := []testExec{
+		{
+			name: "one buffer consumer",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				return returnDefaultBufConsumer(tst, "tst_one_buf_out")
+			},
+			stderrConsumers: func(tst *testExec) []tee.Consumer {
+				consumer := newBufConsumer(tst, "tst_one_buf_err", "stderr")
+				return []tee.Consumer{consumer}
+			},
+			script: scriptStdOutAndErr,
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(t, results)
+				assertExecError(t, err, false)
+				assertDefaultBuffer(t, tst, `First string
+Second string
+Third string
+`)
+				assertBuffer(t, tst.consumersData["stderr"], `Error first
+Error second
+Error third
+`)
+			},
+		},
+	}
+
+	t.Run("stdout only", func(t *testing.T) {
+		for indx, tt := range stdOutOnlyTests {
 			if suit.checkStdOnlyTestSkip(t, indx, tt.name) {
+				continue
+			}
+
+			tt.run(t)
+		}
+	})
+
+	t.Run("stdout and stderr", func(t *testing.T) {
+		for indx, tt := range stdoutAndStdErrTests {
+			if suit.checkStdoutAndErrTestSkip(t, indx, tt.name) {
 				continue
 			}
 
@@ -247,7 +284,7 @@ func (s *testExecSuit) enableDebug(enable bool) {
 	}
 }
 
-func (s *testExecSuit) runOnlyStdOnlyTest(numbers ...int) {
+func (s *testExecSuit) fillRunTestsEnv(envName string, numbers ...int) {
 	if len(numbers) == 0 {
 		return
 	}
@@ -257,16 +294,17 @@ func (s *testExecSuit) runOnlyStdOnlyTest(numbers ...int) {
 		strs = append(strs, fmt.Sprintf("%d", n))
 	}
 
-	s.root.Setenv("RUN_STD_ONLY_TEST", strings.Join(strs, ","))
+	s.root.Setenv(envName, strings.Join(strs, ","))
 }
 
-func (s *testExecSuit) checkStdOnlyTestSkip(t *testing.T, indx int, name string) bool {
-	runOnlyStdOutOnlyTest := os.Getenv("RUN_STD_ONLY_TEST")
-	if runOnlyStdOutOnlyTest == "" {
+func (s *testExecSuit) parseAndCheckTestsForRun(t *testing.T, envName string, indx int, name string) bool {
+	runOnlyTests := os.Getenv(envName)
+
+	if runOnlyTests == "" {
 		return false
 	}
 
-	numbersStrs := strings.Split(runOnlyStdOutOnlyTest, ",")
+	numbersStrs := strings.Split(runOnlyTests, ",")
 
 	toRun := make(map[int]struct{})
 	for _, s := range numbersStrs {
@@ -280,12 +318,28 @@ func (s *testExecSuit) checkStdOnlyTestSkip(t *testing.T, indx int, name string)
 	}
 
 	if _, ok := toRun[indx]; !ok {
-		t.Logf("!!!!!! Skip std only test %s because run only %v !!!!", name, toRun)
+		t.Logf("!!!!!! Skip %s test %s because run only %v !!!!", envName, name, toRun)
 		s.setHasSkipped()
 		return true
 	}
 
 	return false
+}
+
+func (s *testExecSuit) runStdoutOnlyTest(numbers ...int) {
+	s.fillRunTestsEnv("RUN_STD_ONLY_TEST", numbers...)
+}
+
+func (s *testExecSuit) checkStdOnlyTestSkip(t *testing.T, indx int, name string) bool {
+	return s.parseAndCheckTestsForRun(t, "RUN_STD_ONLY_TEST", indx, name)
+}
+
+func (s *testExecSuit) runStdoutAndErrTest(numbers ...int) {
+	s.fillRunTestsEnv("RUN_STD_OUT_AND_ERR_TEST", numbers...)
+}
+
+func (s *testExecSuit) checkStdoutAndErrTestSkip(t *testing.T, indx int, name string) bool {
+	return s.parseAndCheckTestsForRun(t, "RUN_STD_OUT_AND_ERR_TEST", indx, name)
 }
 
 type testExec struct {
@@ -357,8 +411,6 @@ func (tt *testExec) run(t *testing.T) {
 func newBufConsumer(tst *testExec, name, bufKey string) tee.Consumer {
 	buf := &bytes.Buffer{}
 	tst.consumersData[bufKey] = buf
-	a := 0
-	a++
 	return tee.NewBufferConsumer(buf, name)
 }
 
@@ -491,24 +543,24 @@ echo "Third string"
 `
 
 	scriptOnlyStdErr = `#!/usr/bin/env bash
-echo "First err" >&2
-echo "Second err" >&2
-echo "Third err" >&2
+echo "Error first" >&2
+echo "Error second" >&2
+echo "Error third" >&2
 `
 
 	scriptStdOutAndErr = `#!/usr/bin/env bash
 echo "First string"
-echo "First err" >&2
+echo "Error first" >&2
 echo "Second string"
-echo "Second err" >&2
+echo "Error second" >&2
 echo "Third string"
-echo "Third err" >&2
+echo "Error third" >&2
 `
 	scriptStdOutAndErrWithErrExit = `#!/usr/bin/env bash
 echo "First string"
-echo "First err" >&2
+echo "Error first" >&2
 echo "Second string"
-echo "Second err" >&2
+echo "Error second" >&2
 exit 1
 `
 )
@@ -516,23 +568,23 @@ exit 1
 func scriptStdOutAndErrWithSleep(seconds int) string {
 	return fmt.Sprintf(`#!/usr/bin/env bash
 echo "First string"
-echo "First err" >&2
+echo "Error first" >&2
 echo "Second string"
 sleep %d
-echo "Second err" >&2
+echo "Error second" >&2
 echo "Third string"
-echo "Third err" >&2
+echo "Error third" >&2
 `, seconds)
 }
 
 func scriptStdOutAndErrWithSleepInEnd(seconds int) string {
 	return fmt.Sprintf(`#!/usr/bin/env bash
 echo "First string"
-echo "First err" >&2
+echo "Error first" >&2
 echo "Second string"
-echo "Second err" >&2
+echo "Error second" >&2
 echo "Third string"
-echo "Third err" >&2
+echo "Error third" >&2
 sleep %d
 `, seconds)
 }
