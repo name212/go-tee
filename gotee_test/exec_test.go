@@ -31,8 +31,10 @@ func TestExec(t *testing.T) {
 	suit.runStdoutAndErrTest()
 
 	var (
-		errStdoutOnlyWriter       = fmt.Errorf("errStdoutOnlyWriter")
-		errStdoutOnlyWriterSecond = fmt.Errorf("secondErrStdoutOnlyWriter")
+		errStdoutWriter       = fmt.Errorf("errStdoutWriter")
+		errStdoutWriterSecond = fmt.Errorf("secondErrStdoutWriter")
+		errStderrWriter       = fmt.Errorf("errStderrWriter")
+		//errStderrWriterSecond = fmt.Errorf("secondErrStderrWriter")
 	)
 
 	stdOutOnlyTests := []testExec{
@@ -126,8 +128,8 @@ Third string
 				consumers := returnDefaultErrWriterConsumer(tst, "stdout_err_writer", func(b []byte) ([]byte, error) {
 					cut := []byte("Second")
 					if bytes.Contains(b, cut) {
-						t.Logf("Return error %v", errStdoutOnlyWriter)
-						return cut, errStdoutOnlyWriter
+						t.Logf("Return error %v", errStdoutWriter)
+						return cut, errStdoutWriter
 					}
 					return cut, nil
 				})
@@ -138,7 +140,7 @@ Third string
 			},
 			script: scriptStdoutAndStderr,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
-				assertExecResults(t, results, errStdoutOnlyWriter)
+				assertExecResults(t, results, errStdoutWriter)
 				assertExecError(t, err, false)
 
 				assertDefaultWriterConsumer(t, tst, "First string\n")
@@ -156,8 +158,8 @@ Third string
 				consumers := returnDefaultErrWriterConsumer(tst, "stdout_err_writer_first", func(b []byte) ([]byte, error) {
 					cut := []byte("Second")
 					if bytes.Contains(b, cut) {
-						t.Logf("Return error for first %v", errStdoutOnlyWriter)
-						return cut, errStdoutOnlyWriter
+						t.Logf("Return error for first %v", errStdoutWriter)
+						return cut, errStdoutWriter
 					}
 					return cut, nil
 				})
@@ -165,8 +167,8 @@ Third string
 				second := newErrWriterConsumer(tst, "stdout_err_writer_second", "second", func(b []byte) ([]byte, error) {
 					cut := []byte("string")
 					if bytes.Contains(b, cut) {
-						t.Logf("Return error for second %v", errStdoutOnlyWriterSecond)
-						return cut, errStdoutOnlyWriterSecond
+						t.Logf("Return error for second %v", errStdoutWriterSecond)
+						return cut, errStdoutWriterSecond
 					}
 					return cut, nil
 				})
@@ -182,8 +184,8 @@ Third string
 				assertExecResults(
 					t,
 					results,
-					errStdoutOnlyWriter,
-					errStdoutOnlyWriterSecond,
+					errStdoutWriter,
+					errStdoutWriterSecond,
 				)
 				assertExecError(t, err, false)
 
@@ -324,6 +326,58 @@ Third string
 Error second
 Error third
 `)
+			},
+		},
+
+		{
+			name: "multiple consumers with one error",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				consumers := returnDefaultErrWriterConsumer(tst, "out_err_one_err_err_writer", func(b []byte) ([]byte, error) {
+					cut := []byte("Second")
+					if bytes.Contains(b, cut) {
+						t.Logf("Return error %v", errStdoutWriter)
+						return cut, errStdoutWriter
+					}
+					return cut, nil
+				})
+
+				consumers = append(consumers, returnDefaultLineConsumer(tst, "out_err_one_err_writer_line_all")...)
+
+				return consumers
+			},
+
+			stderrConsumers: func(tst *testExec) []tee.Consumer {
+				errConsumer := newErrWriterConsumer(tst, "out_err_one_err_err_writer_err", "stderr_err", func(b []byte) ([]byte, error) {
+					cut := []byte(" first")
+					if bytes.Contains(b, cut) {
+						t.Logf("Return error %v", errStderrWriter)
+						return cut, errStderrWriter
+					}
+					return cut, nil
+				})
+
+				linesConsumer := newLineConsumer(tst, "out_err_one_err_writer_line_all_err", "stderr_line")
+
+				return []tee.Consumer{errConsumer, linesConsumer}
+			},
+			script: scriptStdoutAndStderr,
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(t, results, errStdoutWriter)
+				assertExecError(t, err, false)
+
+				assertDefaultWriterConsumer(t, tst, "First string\n")
+				assertDefaultLinesHandler(t, tst, []string{
+					"First string",
+					"Second string",
+					"Third string",
+				}...)
+
+				assertWriterConsumer(t, tst.consumersData["stderr_err"], "Error")
+				assertStringLineHandler(t, tst.consumersData["stderr_line"], []string{
+					"Error first",
+					"Error second",
+					"Error third",
+				}...)
 			},
 		},
 	}
