@@ -95,13 +95,6 @@ func newStoppedResults() *Results {
 	}
 }
 
-func newEmptyResults() *Results {
-	return &Results{
-		ReadErr:       nil,
-		ConsumersErrs: make(ConsumersErrors),
-	}
-}
-
 type (
 	noValT   = struct{}
 	stopChan = chan noValT

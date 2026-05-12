@@ -39,9 +39,9 @@ func TestExec(t *testing.T) {
 		{
 			name: "one buffer consumer",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
-				return returnDefaultBufConsumer(tst, "tst_one_buf")
+				return returnDefaultBufConsumer(tst, "stdout_one_buf")
 			},
-			script: scriptOnlyStdOut,
+			script: scriptOnlyStdout,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
 				assertExecResults(t, results)
 				assertExecError(t, err, false)
@@ -55,11 +55,11 @@ Third string
 		{
 			name: "multiple consumers",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
-				consumers := returnDefaultBufConsumer(tst, "tst_multiple_buf")
-				consumers = append(consumers, returnDefaultLineConsumer(tst, "tst_multiple_line")...)
-				return append(consumers, returnDefaultWriterConsumer(tst, "tst_multiple_writer")...)
+				consumers := returnDefaultBufConsumer(tst, "stdout_multiple_buf")
+				consumers = append(consumers, returnDefaultLineConsumer(tst, "stout_multiple_line")...)
+				return append(consumers, returnDefaultWriterConsumer(tst, "stdout_multiple_writer")...)
 			},
-			script: scriptOnlyStdOut,
+			script: scriptOnlyStdout,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
 				assertExecResults(t, results)
 				assertExecError(t, err, false)
@@ -80,11 +80,11 @@ Third string
 		{
 			name: "multiple consumers stdout with stderr",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
-				consumers := returnDefaultBufConsumer(tst, "tst_both_multiple_buf")
-				consumers = append(consumers, returnDefaultLineConsumer(tst, "tst__both_multiple_line")...)
-				return append(consumers, returnDefaultWriterConsumer(tst, "tst_both_multiple_writer")...)
+				consumers := returnDefaultBufConsumer(tst, "stdout_both_multiple_buf")
+				consumers = append(consumers, returnDefaultLineConsumer(tst, "stdout_both_multiple_line")...)
+				return append(consumers, returnDefaultWriterConsumer(tst, "stdout_both_multiple_writer")...)
 			},
-			script: scriptStdOutAndErr,
+			script: scriptStdoutAndStderr,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
 				assertExecResults(t, results)
 				assertExecError(t, err, false)
@@ -105,11 +105,11 @@ Third string
 		{
 			name: "multiple consumers only stderr",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
-				consumers := returnDefaultBufConsumer(tst, "tst_both_multiple_buf")
-				consumers = append(consumers, returnDefaultLineConsumer(tst, "tst_both_multiple_line")...)
-				return append(consumers, returnDefaultWriterConsumer(tst, "tst_both_multiple_writer")...)
+				consumers := returnDefaultBufConsumer(tst, "stdout_both_multiple_buf")
+				consumers = append(consumers, returnDefaultLineConsumer(tst, "stdout_both_multiple_line")...)
+				return append(consumers, returnDefaultWriterConsumer(tst, "stdout_both_multiple_writer")...)
 			},
-			script: scriptOnlyStdErr,
+			script: scriptOnlyStderr,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
 				assertExecResults(t, results)
 				assertExecError(t, err, false)
@@ -121,7 +121,7 @@ Third string
 		},
 
 		{
-			name: "multiple consumers with error",
+			name: "multiple consumers with one error",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
 				consumers := returnDefaultErrWriterConsumer(tst, "stdout_err_writer", func(b []byte) ([]byte, error) {
 					cut := []byte("Second")
@@ -136,9 +136,9 @@ Third string
 
 				return consumers
 			},
-			script: scriptStdOutAndErr,
+			script: scriptStdoutAndStderr,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
-				assertExecResults(t, results, errStdoutOnlyWriter.Error())
+				assertExecResults(t, results, errStdoutOnlyWriter)
 				assertExecError(t, err, false)
 
 				assertDefaultWriterConsumer(t, tst, "First string\n")
@@ -182,8 +182,8 @@ Third string
 				assertExecResults(
 					t,
 					results,
-					errStdoutOnlyWriter.Error(),
-					errStdoutOnlyWriterSecond.Error(),
+					errStdoutOnlyWriter,
+					errStdoutOnlyWriterSecond,
 				)
 				assertExecError(t, err, false)
 
@@ -197,19 +197,34 @@ Third string
 				assertWriterConsumer(t, tst.consumersData["second"], "First ")
 			},
 		},
+
+		{
+			name: "exec error",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				return returnDefaultBufConsumer(tst, "stout_exit_err")
+			},
+			script: scriptStdOutAndErrWithErrExit,
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(t, results)
+				assertExecError(t, err, true)
+				assertDefaultBuffer(t, tst, `First string
+Second string
+`)
+			},
+		},
 	}
 
 	stdoutAndStdErrTests := []testExec{
 		{
 			name: "one buffer consumer",
 			stdoutConsumers: func(tst *testExec) []tee.Consumer {
-				return returnDefaultBufConsumer(tst, "tst_one_buf_out")
+				return returnDefaultBufConsumer(tst, "out_err_one_buf_out")
 			},
 			stderrConsumers: func(tst *testExec) []tee.Consumer {
-				consumer := newBufConsumer(tst, "tst_one_buf_err", "stderr")
+				consumer := newBufConsumer(tst, "out_err_one_buf_err", "stderr")
 				return []tee.Consumer{consumer}
 			},
-			script: scriptStdOutAndErr,
+			script: scriptStdoutAndStderr,
 			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
 				assertExecResults(t, results)
 				assertExecError(t, err, false)
@@ -223,11 +238,99 @@ Error third
 `)
 			},
 		},
+
+		{
+			name: "multiple consumers",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				consumers := returnDefaultBufConsumer(tst, "out_err_mul_buf")
+				consumers = append(consumers, returnDefaultLineConsumer(tst, "out_err_mul_line")...)
+				return append(consumers, returnDefaultWriterConsumer(tst, "out_err_mul_writer")...)
+			},
+			stderrConsumers: func(tst *testExec) []tee.Consumer {
+				bufConsumer := newBufConsumer(tst, "out_err_mul_buf_err", "stderr_buf")
+				lineConsumer := newLineConsumer(tst, "out_err_mul_line_err", "stderr_line")
+				writerConsumer := newWriterConsumer(tst, "out_err_mul_writer", "stderr_writer")
+				return []tee.Consumer{bufConsumer, lineConsumer, writerConsumer}
+			},
+			script: scriptStdoutAndStderr,
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(t, results)
+				assertExecError(t, err, false)
+				bufOutExpected := `First string
+Second string
+Third string
+`
+				bufErrExpected := `Error first
+Error second
+Error third
+`
+				stdoutLinesExpected := []string{
+					"First string",
+					"Second string",
+					"Third string",
+				}
+				stderrLinesExpected := []string{
+					"Error first",
+					"Error second",
+					"Error third",
+				}
+
+				assertDefaultBuffer(t, tst, bufOutExpected)
+				assertDefaultLinesHandler(t, tst, stdoutLinesExpected...)
+				assertDefaultWriterConsumer(t, tst, bufOutExpected)
+
+				assertBuffer(t, tst.consumersData["stderr_buf"], bufErrExpected)
+				assertStringLineHandler(t, tst.consumersData["stderr_line"], stderrLinesExpected...)
+				assertWriterConsumer(t, tst.consumersData["stderr_writer"], bufErrExpected)
+			},
+		},
+
+		{
+			name: "only out stdout",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				return returnDefaultBufConsumer(tst, "out_err_only_out")
+			},
+			stderrConsumers: func(tst *testExec) []tee.Consumer {
+				consumer := newBufConsumer(tst, "out_err_only_out_err", "stderr")
+				return []tee.Consumer{consumer}
+			},
+			script: scriptOnlyStdout,
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(t, results)
+				assertExecError(t, err, false)
+				assertDefaultBuffer(t, tst, `First string
+Second string
+Third string
+`)
+				assertBuffer(t, tst.consumersData["stderr"])
+			},
+		},
+
+		{
+			name: "only out stderr",
+			stdoutConsumers: func(tst *testExec) []tee.Consumer {
+				return returnDefaultBufConsumer(tst, "out_err_only_err_out")
+			},
+			stderrConsumers: func(tst *testExec) []tee.Consumer {
+				consumer := newBufConsumer(tst, "out_err_only_err_err", "stderr")
+				return []tee.Consumer{consumer}
+			},
+			script: scriptOnlyStderr,
+			assert: func(t *testing.T, tst *testExec, results *tee.Results, err error) {
+				assertExecResults(t, results)
+				assertExecError(t, err, false)
+				assertDefaultBuffer(t, tst)
+				assertBuffer(t, tst.consumersData["stderr"], `Error first
+Error second
+Error third
+`)
+			},
+		},
 	}
 
 	t.Run("stdout only", func(t *testing.T) {
 		for indx, tt := range stdOutOnlyTests {
-			if suit.checkStdOnlyTestSkip(t, indx, tt.name) {
+			if suit.checkStdoutOnlyTestSkip(t, indx, tt.name) {
 				continue
 			}
 
@@ -304,6 +407,10 @@ func (s *testExecSuit) parseAndCheckTestsForRun(t *testing.T, envName string, in
 		return false
 	}
 
+	if runOnlyTests == "-1" {
+		return true
+	}
+
 	numbersStrs := strings.Split(runOnlyTests, ",")
 
 	toRun := make(map[int]struct{})
@@ -330,7 +437,7 @@ func (s *testExecSuit) runStdoutOnlyTest(numbers ...int) {
 	s.fillRunTestsEnv("RUN_STD_ONLY_TEST", numbers...)
 }
 
-func (s *testExecSuit) checkStdOnlyTestSkip(t *testing.T, indx int, name string) bool {
+func (s *testExecSuit) checkStdoutOnlyTestSkip(t *testing.T, indx int, name string) bool {
 	return s.parseAndCheckTestsForRun(t, "RUN_STD_ONLY_TEST", indx, name)
 }
 
@@ -508,12 +615,11 @@ func assertBuffer(t *testing.T, rawBuf any, expected ...string) {
 	}
 }
 
-func assertExecResults(t *testing.T, r *tee.Results, contains ...string) {
+func assertExecResults(t *testing.T, r *tee.Results, contains ...error) {
 	if len(contains) > 0 {
 		require.NotNil(t, r, "results should not nil")
-		errStr := r.Error()
 		for _, c := range contains {
-			require.Contains(t, errStr, c, "results should contain err")
+			require.ErrorIs(t, r.GetError(), c, "results should contain err")
 		}
 
 		return
@@ -536,19 +642,19 @@ func assertExecError(t *testing.T, err error, shouldBe bool) {
 }
 
 var (
-	scriptOnlyStdOut = `#!/usr/bin/env bash
+	scriptOnlyStdout = `#!/usr/bin/env bash
 echo "First string"
 echo "Second string"
 echo "Third string"
 `
 
-	scriptOnlyStdErr = `#!/usr/bin/env bash
+	scriptOnlyStderr = `#!/usr/bin/env bash
 echo "Error first" >&2
 echo "Error second" >&2
 echo "Error third" >&2
 `
 
-	scriptStdOutAndErr = `#!/usr/bin/env bash
+	scriptStdoutAndStderr = `#!/usr/bin/env bash
 echo "First string"
 echo "Error first" >&2
 echo "Second string"

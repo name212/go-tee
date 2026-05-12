@@ -98,10 +98,6 @@ func RunCmdWithCloseWait(w time.Duration) RunCmdOpt {
 }
 
 func RunCmd(ctx context.Context, cmd *exec.Cmd, opts ...RunCmdOpt) (*Results, error) {
-	returnErr := func(err error) (*Results, error) {
-		return newEmptyResults(), err
-	}
-
 	cloneOpts := make([]RunCmdOpt, len(opts))
 	copy(cloneOpts, opts)
 
@@ -114,7 +110,7 @@ func RunCmd(ctx context.Context, cmd *exec.Cmd, opts ...RunCmdOpt) (*Results, er
 
 	stream, cleaner, err := NewStreamForCmd(cmd, cloneOpts...)
 	if err != nil {
-		return returnErr(internal.ConcatErrs(ErrCreateStreamBeforeRun, err))
+		return nil, internal.ConcatErrs(ErrCreateStreamBeforeRun, err)
 	}
 
 	resCh := make(chan *Results, 1)
@@ -132,25 +128,27 @@ func RunCmd(ctx context.Context, cmd *exec.Cmd, opts ...RunCmdOpt) (*Results, er
 			err = internal.AppendErr(err, cleanerErr)
 		}
 
-		return newEmptyResults(), err
+		return nil, err
 	}
 
 	if err := cmd.Start(); err != nil {
 		return cleanupAndReturnErr(fmt.Errorf("%w cannot start: %w", ErrRunCmd, err))
 	}
 
+	var resErr error
+
 	if err := cmd.Wait(); err != nil {
-		return cleanupAndReturnErr(fmt.Errorf("%w cannot wait: %w", ErrRunCmd, err))
+		resErr = internal.AppendErr(resErr, fmt.Errorf("%w cannot wait: %w", ErrRunCmd, err))
 	}
 
 	stream.Stop()
 	results := <-resCh
 
 	if err := cleaner.GetError(); err != nil {
-		return results, internal.ConcatErrs(ErrCleanAfterRun, err)
+		resErr = internal.AppendErr(resErr, internal.ConcatErrs(ErrCleanAfterRun, err))
 	}
 
-	return results, nil
+	return results, resErr
 }
 
 func NewStreamForCmd(cmd *exec.Cmd, opts ...RunCmdOpt) (*CombineStream, CmdCleaner, error) {
